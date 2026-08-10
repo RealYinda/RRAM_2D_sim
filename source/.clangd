@@ -1,0 +1,7 @@
+# clangd 配置文件 — 指向编译数据库并补充 GCC 4.8 系统头文件路径
+CompileFlags:
+  CompilationDatabase: ../build
+  Add:
+    - -I/usr/lib/gcc/x86_64-linux-gnu/4.8/include
+    - -I/usr/lib/gcc/x86_64-linux-gnu/4.8/include-fixed
+    - -DNDIM=2

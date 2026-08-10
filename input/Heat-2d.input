@@ -1,0 +1,137 @@
+// 
+// 文件名:	Heat-2d.input
+// 软件包:	JPSOL application
+// 版权  :	(c) 2004-2010 北京应用物理与计算数学研究所
+// 版本号:	$ Revision: 96 $
+// 修改  :	$ Date: 2011-05-30 10:29:13 +0800 (一, 2011-05-30) $
+// 描述  :	输入文件: JPSOL-JAUMIN-Heat 实例.
+//
+
+Main{
+  log_file_name = "Output-RRAM-2d.log" // 日志文件名称.
+  log_all_nodes = FALSE
+
+  // 可视化数据场的输出参数.
+  javis_dump_interval         = 10               // 输出时间步的间隔. 0表示关闭.
+  javis_dump_dirname          = "Output-RRAM-2d" // 存储数据场的目录名.
+  javis_number_procs_per_file = 1               // 多少个进程共享一个输出文件.
+
+  // 重启动控制参数.
+  restart_dump_interval = 0                 // 重启动时间步的间隔. 0表示关闭.
+  restart_dump_dirname  = "restart_heat-2d" // 存储重启动数据场的目录名.
+}
+
+FEM {
+  element_type    = "LinearTriangle"
+  integrator_type = "LinearTriangle"
+  shape_func_type = "LinearTriangle"
+
+  Solver {
+    solver_lib      = "JPSOL"
+    solver_name     = "AMG_CG"
+    residual_tol    = 1.0e-18
+    max_iter        = 200
+    print_iter_info = 2 
+    Matrix{
+      Matrix_Type = "VBL"
+    }
+    SolverE{
+		  solver_lib = "HYPRE" 
+		  solver_name = "AMG"
+		  residual_tol= 1.0e-15            // 解法器阈值
+		  max_iter = 10000                      // 解法器最大迭代步数
+		  solver_min_iter = 1                         // 解法器最小迭代步数
+		  print_iter_info    = 1 
+		}
+		SolverDD{
+			solver_name = "petsc_solver"
+   		expert_options = "-ksp_converged_reason -ksp_type preonly -pc_type lu -pc_factor_mat_solver_package mumps"
+		}
+    SolverT{
+		  solver_lib = "HYPRE" 
+		  solver_name = "AMG"
+		  residual_tol= 1.0e-15            // 解法器阈值
+		  max_iter = 10000                      // 解法器最大迭代步数
+		  solver_min_iter = 1                         // 解法器最小迭代步数
+		  print_iter_info    = 1 
+		}
+  }
+  BoundaryCondition{
+		temperature_initial = 300
+		num_temperature = 1 
+		//固定温度边界个数
+		temperature1
+		{
+			temp_face=3
+			temperature=300
+		}
+		//固定浓度
+		num_concentration= 1
+		//浓度边界个数
+		concentration1
+		{
+			con_face=4
+			concentration=0
+		}
+		//电压边界瞬态
+		num_timevoltage= 1
+		timevoltage1
+		{
+			vol_face=1 
+		}
+		//电压边界固定
+		num_voltage= 1
+		//固定电压边界个数
+	 	voltage1
+		{
+			vol_face=2
+			voltage=0
+		}
+	}
+	Material{
+		numofmaterial = 3
+		material1 = 2, 4
+		material2 = 3
+		material3 = 1, 5
+		region_1 { set_id=1; epsilonr=1.0; mur=1.0; sigma=0.0; K=20.0; density=1.0; Cp=1.0; }
+		region_2 { set_id=2; epsilonr=1.0; mur=1.0; sigma=0.0; K=23.0; density=1.0; Cp=1.0; }
+		region_3 { set_id=3; epsilonr=1.0; mur=1.0; sigma=8.9e6; K=71.6; density=1.0; Cp=1.0; }
+	}	  
+  constraint_types = "displacement0"
+  constraint_marks = 1
+  Dt = 0.01
+}
+
+GridTopology {
+}
+
+GridGeometry {
+  MeshImportationParameter{
+    //file_name    = "../input/mesh-2d-10.k"
+    file_name    = "../input/rram_ecthermo.k"
+    refine_times = 0
+  }
+}
+
+HierarchyTimeIntegrator{
+  // 时间控制参数
+  start_time           = 0.e0 // 模拟的初始时刻.
+  end_time             = 1.0  // 模拟的终止时刻.
+  max_integrator_steps = 1    // 模拟的最大时间步数.
+  max_dt               = 1.0  // 最大时间步步长.
+  grow_dt              = 1.2  // 连续两个时间步长的最大放大倍数.
+
+  GriddingAlgorithm{
+    patch_size = 0 // 网格片大小.
+  }
+}
+
+JaVisDataWriter{
+}
+
+TimerManager{
+  timer_list   = "*::*::*"
+  print_summed = TRUE
+  print_max    = TRUE
+}
+
