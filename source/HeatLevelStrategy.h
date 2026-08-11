@@ -168,6 +168,8 @@ private:
   tbox::Pointer<algs::NumericalIntegratorComponent<NDIM> > d_T_mat_intc;
   tbox::Pointer<algs::NumericalIntegratorComponent<NDIM> > d_T_rhs_intc;
   tbox::Pointer<algs::NumericalIntegratorComponent<NDIM> > d_T_cons_intc;
+  /*!@brief 数值构件: 温度场后处理 (误差向量 + plot 更新) */
+  tbox::Pointer<algs::NumericalIntegratorComponent<NDIM> > d_T_post_intc;
 
   
 

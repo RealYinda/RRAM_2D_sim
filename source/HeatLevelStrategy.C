@@ -90,6 +90,8 @@ void HeatLevelStrategy::initializeLevelIntegrator(
   d_T_rhs_intc = new algs::NumericalIntegratorComponent<NDIM>("T_RHS", d_patch_strategy, manager);
   /// 温度场构件：加载约束.
   d_T_cons_intc = new algs::NumericalIntegratorComponent<NDIM>("T_CONS", d_patch_strategy, manager);
+  /// 温度场构件：后处理 (计算误差向量并更新温度 plot, 与 3D PossionLevelStrategy 一致)
+  d_T_post_intc = new algs::NumericalIntegratorComponent<NDIM>("thermal_POST", d_patch_strategy, manager);
 
   d_DD_mat_intc = new algs::NumericalIntegratorComponent<NDIM>("DD_MAT", d_patch_strategy, manager);
   d_DD_rhs_intc = new algs::NumericalIntegratorComponent<NDIM>("DD_RHS", d_patch_strategy, manager);
@@ -187,8 +189,15 @@ int HeatLevelStrategy::advanceLevel(const tbox::Pointer<hier::BasePatchLevel<NDI
     d_DD_solver->setRHS(DD_vec_id);
     d_DD_solver->solve(first_step, DD_sol_id, patch_level, d_solver_db->getDatabase("SolverDD"));
     d_DD_iter_post_intc->computing(patch_level, current_time, actual_dt, false);
-    double DD_REC = 0.0;
-    // NOTE: JVector/l2Norm skip (DD solver void return; zero-pivot on remote JAUMIN)
+    d_DD_sol = new JPSOL::JVector<NDIM, double>(patch_level, DD_sol_id);
+    d_DD_error = new JPSOL::JVector<NDIM, double>(patch_level, DD_error_id);
+    // 计算相对误差收敛判据
+    // 计算解向量的L2范数
+    double DD_sol_l2norm = d_DD_sol->l2Norm();
+    // 计算误差向量的L2范数
+    double DD_error_l2norm = d_DD_error->l2Norm();
+    double DD_REC = DD_error_l2norm / (EPS + DD_sol_l2norm);
+    tbox::pout << "本次浓度场残差: " << DD_REC << endl;
     tbox::pout << "结束浓度场的计算......" << endl;
     /// 电场方程求解
     tbox::pout << "开始电场的计算......" << endl;
@@ -240,6 +249,8 @@ int HeatLevelStrategy::advanceLevel(const tbox::Pointer<hier::BasePatchLevel<NDI
     d_T_solver->setMatrix(T_mat_id);
     d_T_solver->setRHS(T_vec_id);
     d_T_solver->solve(first_step, T_sol_id, patch_level, d_solver_db->getDatabase("SolverT"));
+    // 温度场后处理: 计算误差向量并更新温度 plot (此前缺失, 导致 T_REC 恒为 0)
+    d_T_post_intc->computing(patch_level, current_time, actual_dt, false);
     d_T_sol = new JPSOL::JVector<NDIM, double>(patch_level, T_sol_id);
     d_T_error = new JPSOL::JVector<NDIM, double>(patch_level, T_error_id);
     // 计算解向量的L2范数
@@ -265,11 +276,19 @@ int HeatLevelStrategy::advanceLevel(const tbox::Pointer<hier::BasePatchLevel<NDI
       iter = niter;
       break;
     }
+    // 每轮未收敛时释放多物理场数据片, 下一轮重新分配 (与 3D PossionLevelStrategy::advanceLevel
+    // 第337行一致): 否则 DD_RHS 等向量/矩阵数据片跨轮累积不清零, 每轮解 = 上一轮解+固定增量,
+    // DD_REC 按 1/(k+2) 调和级数衰减, 外层迭代永不收敛.
+    d_alloc_multiphysics_data->deallocatePatchData(patch_level);
   }
   tbox::pout << "外层迭代次数: " << iter << endl;
   if (iter == 1000) tbox::pout << "未收敛(达到最大迭代步数)" << endl;
   /// 循环结束后统一更新浓度场 (DD_temp → DD_plot 滚动到下一时间步)
   d_DD_post_intc->computing(patch_level, current_time, actual_dt, false);
+
+  // 循环结束后释放多物理场数据片内存 (与 3D PossionLevelStrategy::advanceLevel
+  // 第347行一致): 否则 RHS 残留会污染下一个时间步的第一轮迭代.
+  d_alloc_multiphysics_data->deallocatePatchData(patch_level);
 
   actual_dt = predict_dt;
 

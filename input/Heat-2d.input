@@ -36,12 +36,8 @@ FEM {
       Matrix_Type = "VBL"
     }
     SolverE{
-		  solver_lib = "HYPRE" 
-		  solver_name = "AMG"
-		  residual_tol= 1.0e-15            // 解法器阈值
-		  max_iter = 10000                      // 解法器最大迭代步数
-		  solver_min_iter = 1                         // 解法器最小迭代步数
-		  print_iter_info    = 1 
+			solver_name = "petsc_solver"
+   		expert_options = "-ksp_converged_reason -ksp_type preonly -pc_type lu -pc_factor_mat_solver_package mumps"
 		}
 		SolverDD{
 			solver_name = "petsc_solver"
@@ -117,7 +113,7 @@ HierarchyTimeIntegrator{
   // 时间控制参数
   start_time           = 0.e0 // 模拟的初始时刻.
   end_time             = 1.0  // 模拟的终止时刻.
-  max_integrator_steps = 1    // 模拟的最大时间步数.
+  max_integrator_steps = 100  // 模拟的最大时间步数.
   max_dt               = 1.0  // 最大时间步步长.
   grow_dt              = 1.2  // 连续两个时间步长的最大放大倍数.
 
