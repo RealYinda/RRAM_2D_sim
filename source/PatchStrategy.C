@@ -935,7 +935,10 @@ void PatchStrategy::applyDDConstraint(hier::Patch<NDIM> &patch, const double tim
   GET_PATCH_DATA(patch, DDmat_data, d_DD_matrix_id, CSRMatrix, double);
   GET_PATCH_DATA(patch, DDvec_data, d_DD_rhs_id, Vector, double);
 
-  int *dof_map = d_dof_info->getDOFMapping(patch, hier::EntityUtilities::NODE);
+  // 注意: DD 矩阵/向量按 d_dof_info_DD 编号(只对半导体材料分配 DOF),
+  // 必须用 d_dof_info_DD 的映射, 用 d_dof_info(E 的全节点恒等映射)会越界写.
+  // 与 3D OneOrderPatchStrategy::applyDDConstraint 一致.
+  int *dof_map = d_dof_info_DD->getDOFMapping(patch, hier::EntityUtilities::NODE);
   int *row_start = DDmat_data->getRowStartPointer();
   int *col_idx = DDmat_data->getColumnIndicesPointer();
   double *mat_val = DDmat_data->getValuePointer();
@@ -1537,12 +1540,16 @@ void PatchStrategy::postProcess(hier::Patch<NDIM> &patch, const double time, con
   GET_PATCH_DATA(patch, err, d_E_error_id, Vector, double);
 
   int num_nodes = patch.getNumberOfNodes(0);
+  // 2D: DOF 编号稀疏(影像区/悬空节点无自由度), 必须经 dof_map 查表取值
+  int *dof_map = d_dof_info->getDOFMapping(patch, hier::EntityUtilities::NODE);
   double *vec_ptr = vec->getPointer();
   double *plot_ptr = plot_nd->getPointer();
   double *error_ptr = err->getPointer();
   for (int i = 0; i < num_nodes; ++i) {
-    error_ptr[i] = abs(vec_ptr[i] - plot_ptr[i]);
-    plot_ptr[i] = vec_ptr[i];
+    int mapping = dof_map[i];
+    if (mapping == -1) continue;  // 无自由度节点不写解向量
+    error_ptr[i] = abs(vec_ptr[mapping] - plot_ptr[i]);
+    plot_ptr[i] = vec_ptr[mapping];
   }
 }
 
@@ -1556,12 +1563,17 @@ void PatchStrategy::postEProcess(hier::Patch<NDIM> &patch, const double time, co
   GET_PATCH_DATA(patch, err, d_E_error_id, Vector, double);
 
   int num_nodes = patch.getNumberOfNodes(0);
+  // 2D: DOF 编号稀疏(影像区/悬空节点无自由度), 必须经 dof_map 查表取值
+  // 3D 中 DOF 编号恒等于节点索引, 直接 vec_ptr[i] 即可; 2D 用 vec_ptr[mapping].
+  int *dof_map = d_dof_info->getDOFMapping(patch, hier::EntityUtilities::NODE);
   double *vec_ptr = vec->getPointer();
   double *plot_ptr = plot_nd->getPointer();
   double *error_ptr = err->getPointer();
   for (int i = 0; i < num_nodes; ++i) {
-    error_ptr[i] = abs(vec_ptr[i] - plot_ptr[i]);
-    plot_ptr[i] = vec_ptr[i];
+    int mapping = dof_map[i];
+    if (mapping == -1) continue;  // 无自由度节点不写解向量
+    error_ptr[i] = abs(vec_ptr[mapping] - plot_ptr[i]);
+    plot_ptr[i] = vec_ptr[mapping];
   }
 }
 
@@ -1573,13 +1585,17 @@ void PatchStrategy::postthermalProcess(hier::Patch<NDIM> &patch, const double ti
   GET_PATCH_DATA(patch, thermal_err, d_thermal_error_id, Vector, double);
 
   int num_nodes = patch.getNumberOfNodes(1);
+  // 2D: DOF 编号稀疏, 解向量必须经 dof_map 查表; 无自由度节点不写解向量
+  int *dof_map = d_dof_info->getDOFMapping(patch, hier::EntityUtilities::NODE);
   double *thermal_vec_ptr = thermal_vec->getPointer();
   double *thermal_plot_ptr = thermal_plot_nd->getPointer();
   double *thermal_old_ptr = thermal_old_nd->getPointer();
   double *thermal_error_ptr = thermal_err->getPointer();
   for (int i = 0; i < num_nodes; ++i) {
     thermal_old_ptr[i] = thermal_plot_ptr[i];
-    thermal_plot_ptr[i] = thermal_vec_ptr[i];
+    int mapping = dof_map[i];
+    if (mapping == -1) continue;  // 无自由度节点不写解向量
+    thermal_plot_ptr[i] = thermal_vec_ptr[mapping];
     thermal_error_ptr[i] = abs(thermal_plot_ptr[i] - thermal_old_ptr[i]);
   }
 }
@@ -1615,14 +1631,15 @@ void PatchStrategy::postDDIterError(hier::Patch<NDIM> &patch, const double time,
   double *DD_temp_ptr = DD_temp_nd->getPointer();
   double *DD_error_ptr = DD_err->getPointer();
   for (int i = 0; i < num_nodes; ++i) {
-    DD_error_ptr[i] = 0;
     int mapping = dof_map[i];
     if (mapping == -1) {
+      // 影像区/悬空节点无自由度: 解向量槽位不存在, 只更新节点数据片
       DD_temp_ptr[i] = 0;
       continue;
     }
-    // 逐点计算误差
-    DD_error_ptr[i] = abs(DD_vec_ptr[mapping] - DD_temp_ptr[i]);
+    // 误差向量按 DOF 槽写入(mapping), 不能按节点索引 i:
+    // DD 的 DOF 数(2880) < 节点数(4034), 按 i 写会越界损坏堆.
+    DD_error_ptr[mapping] = abs(DD_vec_ptr[mapping] - DD_temp_ptr[i]);
     // 更新上一时刻氧空穴数据片
     DD_temp_ptr[i] = DD_vec_ptr[mapping];
   }
