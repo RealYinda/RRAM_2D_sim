@@ -1,6 +1,6 @@
 //
 // 文件名:     PatchStrategy.h
-// 软件包:     JAUMIN
+// 软件包:     2D FEM
 // 版权　:     北京应用物理与计算数学研究所
 // 版本号:     $Revision: 0 $
 // 修改　:     $Date: Tue May 20 08:45:12 2014 $

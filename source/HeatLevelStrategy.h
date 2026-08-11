@@ -1,6 +1,6 @@
 //
 // 文件名:     HeatLevelStrategy.h
-// 软件包:     JAUMIN
+// 软件包:     2D FEM
 // 版权　:     北京应用物理与计算数学研究所
 // 版本号:     $Revision: 0 $
 // 修改　:     $Date: 2011-11-01 16:22:08 +0800 (二, 2011-11-01) $
@@ -141,12 +141,7 @@ private:
   /*!@brief 右端项构件: 组装右端项 */
   tbox::Pointer<algs::NumericalIntegratorComponent<NDIM> > d_rhs_intc;
 
-  /*!@brief 内存构件: 管理有限元解数据片 */
-  tbox::Pointer<algs::MemoryIntegratorComponent<NDIM> > d_alloc_vec_data;
-
-  /*!@brief 内存构件: 管理有限元解数据片 */
-  tbox::Pointer<algs::MemoryIntegratorComponent<NDIM> > d_alloc_mat_data;
-  /*!@brief 内存构件: 管理多物理解数据片 */
+  /*!@brief 内存构件: 管理多物理场矩阵/向量数据片 */
   tbox::Pointer<algs::MemoryIntegratorComponent<NDIM> > d_alloc_multiphysics_data;
 
   /*!@brief 数值构件 */

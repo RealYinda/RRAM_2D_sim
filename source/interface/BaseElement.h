@@ -1,6 +1,6 @@
 //
 // 文件名:     BaseElement.h
-// 软件包:     JAUMIN application
+// 软件包:     2D FEM application
 // 版权　:     北京应用物理与计算数学研究所
 // 版本号:     $Revision: 0 $
 // 修改　:     $Date: 2011-11-01 16:22:08 +0800 (二, 2011-11-01) $

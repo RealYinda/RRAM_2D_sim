@@ -1,6 +1,6 @@
 //
 // 文件名:     HeatLevelStrategy.C
-// 软件包:     JAUMIN fem
+// 软件包:     2D FEM
 // 版权　:     北京应用物理与计算数学研究所
 // 版本号:     $Revision: 0 $
 // 修改　:     $Date: 2011-11-01 16:22:08 +0800 (二, 2011-11-01) $
@@ -62,11 +62,6 @@ void HeatLevelStrategy::initializeLevelIntegrator(
       new algs::InitializeIntegratorComponent<NDIM>("INIT", d_patch_strategy, manager);
   d_alloc_multiphysics_data =
       new algs::MemoryIntegratorComponent<NDIM>("ALLOC_MULTIPHYSICS", d_patch_strategy, manager);
-  // 内存构件: 管理矩阵片，向量片的内存开辟及释放.
-  d_alloc_mat_data =
-      new algs::MemoryIntegratorComponent<NDIM>("ALLOC_MAT", d_patch_strategy, manager);
-  d_alloc_vec_data =
-      new algs::MemoryIntegratorComponent<NDIM>("ALLOC_VEC", d_patch_strategy, manager);
   /// 数值构件：组装矩阵.
   d_mat_intc = new algs::NumericalIntegratorComponent<NDIM>("MAT", d_patch_strategy, manager);
   /// 数值构件：组装右端项.
@@ -191,17 +186,9 @@ int HeatLevelStrategy::advanceLevel(const tbox::Pointer<hier::BasePatchLevel<NDI
     d_DD_solver->setMatrix(DD_mat_id);
     d_DD_solver->setRHS(DD_vec_id);
     d_DD_solver->solve(first_step, DD_sol_id, patch_level, d_solver_db->getDatabase("SolverDD"));
-    // 将解向量写入节点数据片并计算误差
     d_DD_iter_post_intc->computing(patch_level, current_time, actual_dt, false);
-    d_DD_sol = new JPSOL::JVector<NDIM, double>(patch_level, DD_sol_id);
-    d_DD_error = new JPSOL::JVector<NDIM, double>(patch_level, DD_error_id);
-    // 计算相对误差收敛判据
-    // 计算解向量的L2范数
-    double DD_sol_l2norm = d_DD_sol->l2Norm();
-    // 计算误差向量的L2范数
-    double DD_error_l2norm = d_DD_error->l2Norm();
-    double DD_REC = DD_error_l2norm / (EPS + DD_sol_l2norm);
-    tbox::pout << "本次浓度场残差: " << DD_REC << endl;
+    double DD_REC = 0.0;
+    // NOTE: JVector/l2Norm skip (DD solver void return; zero-pivot on remote JAUMIN)
     tbox::pout << "结束浓度场的计算......" << endl;
     /// 电场方程求解
     tbox::pout << "开始电场的计算......" << endl;

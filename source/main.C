@@ -1,6 +1,6 @@
 //
 // 文件名: main.C
-// 软件包: JAUMIN application
+// 软件包: 2D FEM application
 // 版权  : (c) 2004-2010 北京应用物理与计算数学研究所
 // 版本号: $Revision: 136 $
 // 修改  : $Date: 2011-07-22 08:41:30 +0800 (五, 2011-07-22) $
@@ -23,10 +23,10 @@ using namespace JAUMIN;
 /*!
 *************************************************************************
 *
-* @brief 基于JAUMIN框架的在非结构网格上, 求解Heat方程.
+* @brief 2D RRAM 电热多物理场有限元求解器.
 *
 * 该程序分以下几个步骤:
-* -# 预处理: 初始化JAUMIN环境, 解析输入文件, 读取主程序控制参数;
+* -# 预处理: 初始化计算环境, 解析输入文件, 读取主程序控制参数;
 * -# 创建网格层时间积分算法类对象, 主要包括:
 *    网格层(单块) hier::PatchLevel<NDIM>
 *    -# 有限元算法 Heat
@@ -34,7 +34,7 @@ using namespace JAUMIN;
 *    -# 网格层时间积分算法 algs::HierarchyTimeIntegrator<NDIM>
 * -# 初始化网格片层次结构和物理量数据片;
 * -# 组装矩阵和右端项并求解线性系统;
-* -# 后处理: 释放应用类对象, 释放JAUMIN内部资源.
+* -# 后处理: 释放应用类对象, 释放计算资源.
 *
 ************************************************************************
 */
@@ -59,7 +59,7 @@ static void prefixInputDirName(const std::string& input_filename,
 }
 
 int main(int argc, char* argv[]) {
-  // 初始化JAUMIN环境.
+  // 初始化计算环境.
   tbox::JAUMINManager::startup();
   {
     /*******************************************************************************
@@ -256,7 +256,7 @@ int main(int argc, char* argv[]) {
     // 输出计时器统计的时间数据.
     tbox::TimerManager::getManager()->print(tbox::plog);
   }
-  // 释放JAUMIN内部资源.
+  // 释放计算资源.
   tbox::JAUMINManager::shutdown();
 
   return (0);

@@ -1,6 +1,6 @@
 //
 // 文件名:     PatchStrategy.C
-// 软件包:     JAUMIN
+// 软件包:     2D FEM
 // 版权　:     北京应用物理与计算数学研究所
 // 版本号:     $Revision: 0 $
 // 修改　:     $Date: Tue May 20 08:45:28 2014 $
@@ -253,6 +253,21 @@ void PatchStrategy::initializeComponent(algs::IntegratorComponent<NDIM> *compone
     d_dof_info_DD->registerToInitComponent(component);
 
   } else if (component_name == "ALLOC") {
+    component->registerPatchData(d_E_matrix_id);
+    component->registerPatchData(d_E_solution_id);
+    component->registerPatchData(d_E_rhs_id);
+    component->registerPatchData(d_Ex_id);
+    component->registerPatchData(d_DD_matrix_id);
+    component->registerPatchData(d_DD_solution_id);
+    component->registerPatchData(d_DD_rhs_id);
+    component->registerPatchData(d_thermal_matrix_id);
+    component->registerPatchData(d_thermal_solution_id);
+    component->registerPatchData(d_thermal_rhs_id);
+    component->registerPatchData(d_DD_error_id);
+    component->registerPatchData(d_E_error_id);
+    component->registerPatchData(d_thermal_error_id);
+
+  } else if (component_name == "ALLOC_MULTIPHYSICS") {
     component->registerPatchData(d_E_matrix_id);
     component->registerPatchData(d_E_solution_id);
     component->registerPatchData(d_E_rhs_id);
@@ -772,7 +787,8 @@ void PatchStrategy::buildRHSOnPatch(hier::Patch<NDIM> &patch, const double time,
   int *dof_map = d_dof_info->getDOFMapping(patch, hier::EntityUtilities::NODE);
 
   for (int i = 0; i < num_cells; ++i) {
-    int n_vertex = cell_node_ext[i + 1] - cell_node_ext[i];
+    int n_vertex_raw = cell_node_ext[i + 1] - cell_node_ext[i];
+      int n_vertex = (NDIM == 2) ? 3 : n_vertex_raw;
     tbox::Array<hier::DoubleVector<NDIM> > vertex(n_vertex);
     tbox::Array<int> mapping(n_vertex);
     for (int i1 = 0, j = cell_node_ext[i]; i1 < n_vertex; ++i1, ++j) {
@@ -808,7 +824,8 @@ void PatchStrategy::buildERHSOnPatch(hier::Patch<NDIM> &patch, const double time
   int *dof_map = d_dof_info->getDOFMapping(patch, hier::EntityUtilities::NODE);
 
   for (int i = 0; i < num_cells; ++i) {
-    int n_vertex = cell_node_ext[i + 1] - cell_node_ext[i];
+    int n_vertex_raw = cell_node_ext[i + 1] - cell_node_ext[i];
+      int n_vertex = (NDIM == 2) ? 3 : n_vertex_raw;
     tbox::Array<hier::DoubleVector<NDIM> > vertex(n_vertex);
     tbox::Array<int> mapping(n_vertex);
     for (int i1 = 0, j = cell_node_ext[i]; i1 < n_vertex; ++i1, ++j) {
@@ -844,7 +861,8 @@ void PatchStrategy::buildMatrixOnPatch(hier::Patch<NDIM> &patch, const double ti
   int *dof_map = d_dof_info->getDOFMapping(patch, hier::EntityUtilities::NODE);
 
   for (int i = 0; i < num_cells; ++i) {
-    int n_vertex = cell_node_ext[i + 1] - cell_node_ext[i];
+    int n_vertex_raw = cell_node_ext[i + 1] - cell_node_ext[i];
+      int n_vertex = (NDIM == 2) ? 3 : n_vertex_raw;
     tbox::Array<hier::DoubleVector<NDIM> > vertex(n_vertex);
     tbox::Array<double> T(n_vertex);
     tbox::Array<double> nD(n_vertex);
@@ -889,7 +907,8 @@ void PatchStrategy::calculateEx(hier::Patch<NDIM> &patch, const double time, con
   int *dof_map = d_dof_info->getDOFMapping(patch, hier::EntityUtilities::NODE);
 
   for (int i = 0; i < num_cells; ++i) {
-    int n_vertex = cell_node_ext[i + 1] - cell_node_ext[i];
+    int n_vertex_raw = cell_node_ext[i + 1] - cell_node_ext[i];
+      int n_vertex = (NDIM == 2) ? 3 : n_vertex_raw;
     tbox::Array<hier::DoubleVector<NDIM> > vertex(n_vertex);
     tbox::Array<double> phi(n_vertex);
     tbox::Array<int> mapping(n_vertex);
@@ -963,7 +982,8 @@ void PatchStrategy::buildDDRHSOnPatch(hier::Patch<NDIM> &patch, const double tim
   for (int i = 0; i < num_cells; ++i) {
     bool is_DD_solve = (*Cell_flag)(0, i) == 1 || (*Cell_flag)(0, i) == 2;
     if (is_DD_solve) {
-      int n_vertex = cell_node_ext[i + 1] - cell_node_ext[i];
+      int n_vertex_raw = cell_node_ext[i + 1] - cell_node_ext[i];
+      int n_vertex = (NDIM == 2) ? 3 : n_vertex_raw;
       tbox::Array<hier::DoubleVector<NDIM> > vertex(n_vertex);
       tbox::Array<int> mapping(n_vertex);
       tbox::Array<double> nD(n_vertex);
@@ -1022,8 +1042,11 @@ void PatchStrategy::buildDDMatrixOnPatch(hier::Patch<NDIM> &patch, const double 
     bool is_DD_solve = (*Cell_flag)(0, i) == 1 || (*Cell_flag)(0, i) == 2;
     // 仅对半导体区域进行漂移扩散求解
     if (is_DD_solve) {
-      int n_vertex_local = (NDIM == 2) ? 3 : 4;
-      int n_edge_local = (NDIM == 2) ? 3 : 6;
+      // JAUMIN cell-node 邻接表对三角形也存 4 个槽(第 4 个是填充), 按 3 截断
+      int n_vertex_local = (NDIM == 2) ? 3
+                         : cell_node_ext[i + 1] - cell_node_ext[i];
+      int n_edge_local   = (NDIM == 2) ? 3
+                         : cell_edge_ext[i + 1] - cell_edge_ext[i];
       /// 单元矩阵
       tbox::Pointer<tbox::Matrix<double> > ele_K = new tbox::Matrix<double>();
       ele_K->resize(n_vertex_local, n_vertex_local);
@@ -1049,7 +1072,8 @@ void PatchStrategy::buildDDMatrixOnPatch(hier::Patch<NDIM> &patch, const double 
         }
       }
 
-      int n_vertex = cell_node_ext[i + 1] - cell_node_ext[i];
+      int n_vertex_raw = cell_node_ext[i + 1] - cell_node_ext[i];
+      int n_vertex = (NDIM == 2) ? 3 : n_vertex_raw;
       tbox::Array<hier::DoubleVector<NDIM> > vertex(n_vertex);
       tbox::Array<double> Tn(n_vertex);
       tbox::Array<double> Phi(n_vertex);
@@ -1191,7 +1215,8 @@ void PatchStrategy::buildthermalRHSOnPatch(hier::Patch<NDIM> &patch, const doubl
   int *dof_map = d_dof_info->getDOFMapping(patch, hier::EntityUtilities::NODE);
 
   for (int i = 0; i < num_cells; ++i) {
-    int n_vertex = cell_node_ext[i + 1] - cell_node_ext[i];
+    int n_vertex_raw = cell_node_ext[i + 1] - cell_node_ext[i];
+      int n_vertex = (NDIM == 2) ? 3 : n_vertex_raw;
     tbox::Array<hier::DoubleVector<NDIM> > vertex(n_vertex);
     tbox::Array<int> mapping(n_vertex);
     tbox::Array<double> T_val(n_vertex);
@@ -1245,7 +1270,8 @@ void PatchStrategy::buildthermalMatrixOnPatch(hier::Patch<NDIM> &patch, const do
   int *dof_map = d_dof_info->getDOFMapping(patch, hier::EntityUtilities::NODE);
 
   for (int i = 0; i < num_cells; ++i) {
-    int n_vertex = cell_node_ext[i + 1] - cell_node_ext[i];
+    int n_vertex_raw = cell_node_ext[i + 1] - cell_node_ext[i];
+      int n_vertex = (NDIM == 2) ? 3 : n_vertex_raw;
     tbox::Array<hier::DoubleVector<NDIM> > vertex(n_vertex);
     tbox::Array<double> T(n_vertex);
     tbox::Array<double> nD(n_vertex);
@@ -1291,7 +1317,8 @@ void PatchStrategy::buildTMatrixOnPatch(hier::Patch<NDIM> &patch, const double t
   int *dof_map = d_dof_info->getDOFMapping(patch, hier::EntityUtilities::NODE);
 
   for (int i = 0; i < num_cells; ++i) {
-    int n_vertex = cell_node_ext[i + 1] - cell_node_ext[i];
+    int n_vertex_raw = cell_node_ext[i + 1] - cell_node_ext[i];
+      int n_vertex = (NDIM == 2) ? 3 : n_vertex_raw;
     tbox::Array<hier::DoubleVector<NDIM> > vertex(n_vertex);
     tbox::Array<double> T(n_vertex);
     tbox::Array<double> nD(n_vertex);
@@ -1340,7 +1367,8 @@ void PatchStrategy::buildTRHSOnPatch(hier::Patch<NDIM> &patch, const double time
   int *dof_map = d_dof_info->getDOFMapping(patch, hier::EntityUtilities::NODE);
 
   for (int i = 0; i < num_cells; ++i) {
-    int n_vertex = cell_node_ext[i + 1] - cell_node_ext[i];
+    int n_vertex_raw = cell_node_ext[i + 1] - cell_node_ext[i];
+      int n_vertex = (NDIM == 2) ? 3 : n_vertex_raw;
     tbox::Array<hier::DoubleVector<NDIM> > vertex(n_vertex);
     tbox::Array<int> mapping(n_vertex);
     tbox::Array<double> T_val(n_vertex);
@@ -1435,7 +1463,8 @@ void PatchStrategy::calculateSigma(hier::Patch<NDIM> &patch, const double time, 
 
       for (int jcount = 0; jcount < cells.size(); jcount++) {
         int c = cells[jcount];
-        int n_vertex = cell_node_ext[c + 1] - cell_node_ext[c];
+        int n_vertex_raw = cell_node_ext[c + 1] - cell_node_ext[c];
+        int n_vertex = (NDIM == 2) ? 3 : n_vertex_raw;
         tbox::Array<hier::DoubleVector<NDIM> > vertex(n_vertex);
         tbox::Array<double> T(n_vertex);
         tbox::Array<double> nD(n_vertex);
@@ -1477,7 +1506,8 @@ void PatchStrategy::calculateK(hier::Patch<NDIM> &patch, const double time, cons
 
       for (int jcount = 0; jcount < cells.size(); jcount++) {
         int c = cells[jcount];
-        int n_vertex = cell_node_ext[c + 1] - cell_node_ext[c];
+        int n_vertex_raw = cell_node_ext[c + 1] - cell_node_ext[c];
+        int n_vertex = (NDIM == 2) ? 3 : n_vertex_raw;
         tbox::Array<hier::DoubleVector<NDIM> > vertex(n_vertex);
         tbox::Array<double> T(n_vertex);
         tbox::Array<double> nD(n_vertex);
@@ -1617,7 +1647,8 @@ void PatchStrategy::buildEMatrixOnPatch(hier::Patch<NDIM> &patch, const double t
   int *dof_map = d_dof_info->getDOFMapping(patch, hier::EntityUtilities::NODE);
 
   for (int i = 0; i < num_cells; ++i) {
-    int n_vertex = cell_node_ext[i + 1] - cell_node_ext[i];
+    int n_vertex_raw = cell_node_ext[i + 1] - cell_node_ext[i];
+      int n_vertex = (NDIM == 2) ? 3 : n_vertex_raw;
     tbox::Array<hier::DoubleVector<NDIM> > vertex(n_vertex);
     tbox::Array<double> T(n_vertex);
     tbox::Array<double> nD(n_vertex);
