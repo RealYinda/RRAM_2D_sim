@@ -162,7 +162,9 @@ void PatchStrategy::registerModelVariable() {
   DECLARE_MATVEC_VARIABLE(DD_matrix, CSRMatrix, double, d_dof_info_DD);
   DECLARE_VARIABLE(DD_nD, Node, double, 1, 1);
   DECLARE_VARIABLE(DD_nD_temp, Node, double, 1, 1);
-  DECLARE_MATVEC_VARIABLE(DD_error, Vector, double, d_dof_info_DD);
+  // 误差向量按全节点编号(d_dof_info), 与解向量(按 d_dof_info_DD 压缩编号)不同:
+  // 与 3D OneOrderPatchStrategy 一致, 误差向量按节点存储, 与 DD_temp 节点数据片对齐.
+  DECLARE_MATVEC_VARIABLE(DD_error, Vector, double, d_dof_info);
   DECLARE_VARIABLE(DD_J, Edge, double, 2, 1);
 
   REGISTER_VARIABLE(d_DD_solution_id, DD_solution, CURRENT, 1);
@@ -1631,15 +1633,17 @@ void PatchStrategy::postDDIterError(hier::Patch<NDIM> &patch, const double time,
   double *DD_temp_ptr = DD_temp_nd->getPointer();
   double *DD_error_ptr = DD_err->getPointer();
   for (int i = 0; i < num_nodes; ++i) {
+    // 误差向量按节点索引写(与 3D OneOrderPatchStrategy::postDDtempProcess 一致):
+    // DD_error 注册在 d_dof_info(全节点编号) 上, 大小 = 节点数, 按 i 写安全.
+    DD_error_ptr[i] = 0;  // 初始化
     int mapping = dof_map[i];
     if (mapping == -1) {
-      // 影像区/悬空节点无自由度: 解向量槽位不存在, 只更新节点数据片
+      // 无自由度的节点(非半导体材料): 解向量槽位不存在, 只更新节点数据片
       DD_temp_ptr[i] = 0;
       continue;
     }
-    // 误差向量按 DOF 槽写入(mapping), 不能按节点索引 i:
-    // DD 的 DOF 数(2880) < 节点数(4034), 按 i 写会越界损坏堆.
-    DD_error_ptr[mapping] = abs(DD_vec_ptr[mapping] - DD_temp_ptr[i]);
+    // 逐点计算误差; 解向量按 DOF 槽读(mapping)
+    DD_error_ptr[i] = abs(DD_vec_ptr[mapping] - DD_temp_ptr[i]);
     // 更新上一时刻氧空穴数据片
     DD_temp_ptr[i] = DD_vec_ptr[mapping];
   }
