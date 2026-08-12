@@ -14,7 +14,9 @@
 #include <assert.h>
 #endif
 #include "JAUMINVector.h"
+#include <cmath>
 #include <iomanip>
+#include <mpi.h>
 
 /*************************************************************************
  * 构造函数.
@@ -40,6 +42,11 @@ HeatLevelStrategy::HeatLevelStrategy(
   d_T_solver = d_solver_manager->lookupLinearSolver(
       d_solver_db->getDatabase("SolverT")->getString("solver_name"));
   d_object_name = object_name;
+
+  /// 全局后验误差初值
+  d_global_DD_err = 0.;
+  d_global_T_err = 0.;
+  d_global_E_err = 0.;
 }
 
 /*************************************************************************
@@ -94,6 +101,9 @@ void HeatLevelStrategy::initializeLevelIntegrator(
   d_T_post_intc = new algs::NumericalIntegratorComponent<NDIM>("thermal_POST", d_patch_strategy, manager);
   /// 误差估计构件：多物理场后验误差 (ZZ 梯度恢复, 与 3D ERROR_EST 构件同构)
   d_error_est_intc = new algs::NumericalIntegratorComponent<NDIM>("ERROR_EST", d_patch_strategy, manager);
+
+  /// 归约构件：全局后验误差 (MPI_SUM, 与 3D PossionLevelStrategy 一致)
+  d_reduction_intc = new algs::ReductionIntegratorComponent<NDIM>("RED", MPI_SUM, d_patch_strategy, manager);
 
   d_DD_mat_intc = new algs::NumericalIntegratorComponent<NDIM>("DD_MAT", d_patch_strategy, manager);
   d_DD_rhs_intc = new algs::NumericalIntegratorComponent<NDIM>("DD_RHS", d_patch_strategy, manager);
@@ -290,6 +300,17 @@ int HeatLevelStrategy::advanceLevel(const tbox::Pointer<hier::BasePatchLevel<NDI
 
   /// 每个时间步的多物理场后验误差估计 (ZZ 梯度恢复, 逐单元)
   d_error_est_intc->computing(patch_level, current_time, actual_dt, false);
+
+  /// 全局后验误差: ‖e‖ = (Σ_e η²_e)^{1/2}, 跨进程 MPI_SUM 归约
+  /// (与 3D PossionLevelStrategy 一致: "RED" 构件 → reduceOnPatch 逐 patch 累加局部 Ση²)
+  double glob[3] = {0., 0., 0.};
+  d_reduction_intc->reduction(glob, 3, patch_level, current_time, actual_dt);
+  d_global_DD_err = sqrt(glob[0]);
+  d_global_T_err = sqrt(glob[1]);
+  d_global_E_err = sqrt(glob[2]);
+  tbox::pout << "全局后验误差 ‖e‖: DD = " << d_global_DD_err
+             << "  T = " << d_global_T_err
+             << "  E = " << d_global_E_err << endl;
 
   // 循环结束后释放多物理场数据片内存 (与 3D PossionLevelStrategy::advanceLevel
   // 第347行一致): 否则 RHS 残留会污染下一个时间步的第一轮迭代.

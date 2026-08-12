@@ -20,6 +20,7 @@
 #include "MemoryIntegratorComponent.h"
 #include "NumericalIntegratorComponent.h"
 #include "PatchLevel.h"
+#include "ReductionIntegratorComponent.h"
 #include "StandardComponentPatchStrategy.h"
 #include "TimeIntegratorLevelStrategy.h"
 using namespace JAUMIN;
@@ -111,10 +112,18 @@ public:
                    const double min_dt, const bool first_step, const int step_number,
                    double &actual_dt);
 
+  ///@name 全局后验误差 ‖e‖ = (Σ_e η²_e)^{1/2} (每个时间步收敛后经 MPI_SUM 归约得到)
+  //@{
+  double getGlobalDDError() const { return d_global_DD_err; }
+  double getGlobalTError() const { return d_global_T_err; }
+  double getGlobalEError() const { return d_global_E_err; }
   //@}
 private:
   /*!@brief 对象名称. */
   std::string d_object_name;
+
+  /*!@brief 全局后验误差: 漂移扩散/温度/电场 (每个时间步更新) */
+  double d_global_DD_err, d_global_T_err, d_global_E_err;
 
   /// 解法器数据库.
   tbox::Pointer<tbox::Database> d_solver_db;
@@ -173,7 +182,10 @@ private:
   /*!@brief 数值构件: 多物理场后验误差估计 (ZZ 梯度恢复) */
   tbox::Pointer<algs::NumericalIntegratorComponent<NDIM> > d_error_est_intc;
 
-  
+  /*!@brief 归约构件: 全局后验误差 (MPI_SUM, 与 3D PossionLevelStrategy 一致) */
+  tbox::Pointer<algs::ReductionIntegratorComponent<NDIM> > d_reduction_intc;
+
+
 
   tbox::Pointer<algs::EdgeOrderIntegratorComponent<NDIM> > d_edge_order_intc;
   tbox::Pointer<algs::NumericalIntegratorComponent<NDIM> > d_int_geom_intc;

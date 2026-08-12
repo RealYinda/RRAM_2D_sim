@@ -1866,19 +1866,20 @@ void PatchStrategy::calculateErrorOnPatch(hier::Patch<NDIM> &patch, const double
 void PatchStrategy::reduceOnPatch(double *vector, int len, hier::Patch<NDIM> &patch,
                                   const double time, const double dt,
                                   const string &component_name) {
-  GET_PATCH_DATA(patch, T_new_nd, d_temperature_plot_id, Node, double);
-  GET_PATCH_DATA(patch, T_old_nd, d_thermal_old_id, Node, double);
-
-  double maxdeltaT = 0;
-  double *T_new_ptr = T_new_nd->getPointer();
-  double *T_old_ptr = T_old_nd->getPointer();
-  int num_nodes = patch.getNumberOfNodes(0);
-  for (int i = 0; i < num_nodes; ++i) {
-    double deltaT = abs(T_new_ptr[i] - T_old_ptr[i]);
-    if (deltaT > maxdeltaT)
-      maxdeltaT = deltaT;
+  // 全局后验误差归约: 每 patch 累加局部 Σ_e η²_e (仅本地单元, 不含 ghost,
+  // 防止 MPI_SUM 跨进程重复计数); 全局误差 ‖e‖ = sqrt(Σ_e η²_e) 在
+  // HeatLevelStrategy 中开方并保存/输出.
+  // (注: 原 2D 实现为死代码 maxdeltaT, 从未被任何归约构件调用; 现改作全局误差归约.)
+  GET_PATCH_DATA(patch, DD_err, d_DD_num_error_id, Cell, double);
+  GET_PATCH_DATA(patch, T_err, d_T_num_error_id, Cell, double);
+  GET_PATCH_DATA(patch, E_err, d_E_num_error_id, Cell, double);
+  int num_cells = patch.getNumberOfCells(0);
+  vector[0] = vector[1] = vector[2] = 0.0;
+  for (int c = 0; c < num_cells; ++c) {
+    vector[0] += (*DD_err)(0, c) * (*DD_err)(0, c);
+    vector[1] += (*T_err)(0, c) * (*T_err)(0, c);
+    vector[2] += (*E_err)(0, c) * (*E_err)(0, c);
   }
-  vector[0] = maxdeltaT;
 }
 
 // ===== 输入/重启动 =====
