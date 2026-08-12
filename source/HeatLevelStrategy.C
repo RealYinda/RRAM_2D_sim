@@ -92,6 +92,8 @@ void HeatLevelStrategy::initializeLevelIntegrator(
   d_T_cons_intc = new algs::NumericalIntegratorComponent<NDIM>("T_CONS", d_patch_strategy, manager);
   /// 温度场构件：后处理 (计算误差向量并更新温度 plot, 与 3D PossionLevelStrategy 一致)
   d_T_post_intc = new algs::NumericalIntegratorComponent<NDIM>("thermal_POST", d_patch_strategy, manager);
+  /// 误差估计构件：多物理场后验误差 (ZZ 梯度恢复, 与 3D ERROR_EST 构件同构)
+  d_error_est_intc = new algs::NumericalIntegratorComponent<NDIM>("ERROR_EST", d_patch_strategy, manager);
 
   d_DD_mat_intc = new algs::NumericalIntegratorComponent<NDIM>("DD_MAT", d_patch_strategy, manager);
   d_DD_rhs_intc = new algs::NumericalIntegratorComponent<NDIM>("DD_RHS", d_patch_strategy, manager);
@@ -285,6 +287,9 @@ int HeatLevelStrategy::advanceLevel(const tbox::Pointer<hier::BasePatchLevel<NDI
   if (iter == 1000) tbox::pout << "未收敛(达到最大迭代步数)" << endl;
   /// 循环结束后统一更新浓度场 (DD_temp → DD_plot 滚动到下一时间步)
   d_DD_post_intc->computing(patch_level, current_time, actual_dt, false);
+
+  /// 每个时间步的多物理场后验误差估计 (ZZ 梯度恢复, 逐单元)
+  d_error_est_intc->computing(patch_level, current_time, actual_dt, false);
 
   // 循环结束后释放多物理场数据片内存 (与 3D PossionLevelStrategy::advanceLevel
   // 第347行一致): 否则 RHS 残留会污染下一个时间步的第一轮迭代.

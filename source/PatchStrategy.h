@@ -401,5 +401,9 @@ private:
   // 误差
   int d_Recovery_basis_id;
   int d_J_error_id;
+  // 多物理场后验误差估计 (ZZ 梯度恢复): 漂移扩散/温度/电场单元误差指示子
+  int d_DD_num_error_id;
+  int d_T_num_error_id;
+  int d_E_num_error_id;
 };
 #endif

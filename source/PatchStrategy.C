@@ -222,6 +222,13 @@ void PatchStrategy::registerModelVariable() {
   /// 体插值的电流误差
   DECLARE_VARIABLE(J_error, Cell, double, 1, 1);
   REGISTER_VARIABLE(d_J_error_id, J_error, CURRENT, 1);
+  /// 多物理场后验误差估计 (ZZ 梯度恢复): 漂移扩散/温度/电场单元误差指示子
+  DECLARE_VARIABLE(DD_num_error, Cell, double, 1, 1);
+  REGISTER_VARIABLE(d_DD_num_error_id, DD_num_error, CURRENT, 1);
+  DECLARE_VARIABLE(T_num_error, Cell, double, 1, 1);
+  REGISTER_VARIABLE(d_T_num_error_id, T_num_error, CURRENT, 1);
+  DECLARE_VARIABLE(E_num_error, Cell, double, 1, 1);
+  REGISTER_VARIABLE(d_E_num_error_id, E_num_error, CURRENT, 1);
 }
 
 /*************************************************************************
@@ -251,6 +258,9 @@ void PatchStrategy::initializeComponent(algs::IntegratorComponent<NDIM> *compone
     component->registerInitPatchData(d_Cell_flag_id);
     component->registerInitPatchData(d_Recovery_basis_id);
     component->registerInitPatchData(d_J_error_id);
+    component->registerInitPatchData(d_DD_num_error_id);
+    component->registerInitPatchData(d_T_num_error_id);
+    component->registerInitPatchData(d_E_num_error_id);
     d_dof_info->registerToInitComponent(component);
     d_dof_info_DD->registerToInitComponent(component);
 
@@ -343,6 +353,11 @@ void PatchStrategy::initializeComponent(algs::IntegratorComponent<NDIM> *compone
     component->registerCommunicationPatchData(d_Ex_id, d_Ex_id);
     component->registerCommunicationPatchData(d_nD_plot_id, d_nD_plot_id);
     component->registerCommunicationPatchData(d_temperature_plot_id, d_temperature_plot_id);
+    // 误差估计读取场: 单元材料标记; 误差场自身: 并行下输出/后续归约需一致
+    component->registerCommunicationPatchData(d_Cell_flag_id, d_Cell_flag_id);
+    component->registerCommunicationPatchData(d_DD_num_error_id, d_DD_num_error_id);
+    component->registerCommunicationPatchData(d_T_num_error_id, d_T_num_error_id);
+    component->registerCommunicationPatchData(d_E_num_error_id, d_E_num_error_id);
   } else if (component_name == "DD_ITER_POST") {
   } else if (component_name == "thermal_POST") {
     component->registerCommunicationPatchData(d_thermal_solution_id, d_thermal_solution_id);
@@ -498,6 +513,9 @@ void PatchStrategy::registerPlotData(
   javis_data_writer->registerPlotQuantity("thermal_plot", "SCALAR", d_temperature_plot_id);
   javis_data_writer->registerPlotQuantity("nD", "SCALAR", d_nD_plot_id);
   javis_data_writer->registerPlotQuantity("DD_error", "SCALAR", d_J_error_id);
+  javis_data_writer->registerPlotQuantity("DD_num_error", "SCALAR", d_DD_num_error_id);
+  javis_data_writer->registerPlotQuantity("T_num_error", "SCALAR", d_T_num_error_id);
+  javis_data_writer->registerPlotQuantity("E_num_error", "SCALAR", d_E_num_error_id);
   javis_data_writer->registerPlotQuantity("cell_identity", "SCALAR", d_Cell_flag_id);
 }
 
@@ -1615,6 +1633,9 @@ void PatchStrategy::postDDProcess(hier::Patch<NDIM> &patch, const double time, c
     DD_plot_ptr[i] = DD_temp_ptr[i];
     if (dis_ptr_DD[i] < 1)
       DD_plot_ptr[i] = 0.;
+    // 后处理输出: 强制负浓度归零, 避免非物理负值进入输出/后续计算
+    if (DD_plot_ptr[i] < 0.)
+      DD_plot_ptr[i] = 0.;
   }
 }
 
@@ -1702,7 +1723,123 @@ void PatchStrategy::buildEMatrixOnPatch(hier::Patch<NDIM> &patch, const double t
 
 void PatchStrategy::calculateErrorOnPatch(hier::Patch<NDIM> &patch, const double time,
                                           const double dt, const string &component_name) {
-  TBOX_WARNING("calculateErrorOnPatch: 2D version not yet fully implemented.");
+  // ======================================================================
+  // 多物理场后验误差估计: Zienkiewicz-Zhu 型梯度恢复
+  //   (Zienkiewicz O.C. & Zhu J.Z., "A simple error estimator and adaptive
+  //    procedure for practical engineering analysis", IJNME 24, 1987; SPR 1992)
+  //   指示子:      η²_e = ∫_e |σ*(x) − σ_h(x)|² dΩ
+  //   恢复梯度:    σ*_i = Σ_{e∋i} |e|·σ_h,e / Σ_{e∋i} |e|   (节点面积加权平均)
+  //   单元内恢复:  σ*(x) = Σ_j N_j(x)·σ*_j (线性插值), 重心处 = 节点恢复值算术平均
+  //   σ_h 为线性元的单元常数梯度:
+  //     电场    σ_E  = E_h = −∇V_h               (d_Ex_id)
+  //     浓度    σ_nD = ∇nD_h                     (d_nD_plot_id)
+  //     温度    σ_T  = ∇T_h                      (d_temperature_plot_id)
+  //   误差指示子:  η_e = sqrt( |e|·|σ*(x_c) − σ_h,e|² )
+  // 并行: 恢复只读本 patch 的单元梯度(含 ghost 单元), 误差逐单元写回自身数据片,
+  //       读取场已在 ERROR_EST 关键字下注册 ghost 通信, 无跨片数据交换.
+  // ======================================================================
+  tbox::Pointer<ElementManager<NDIM> > ele_manager = ElementManager<NDIM>::getManager();
+  tbox::Pointer<BaseElement<NDIM> > ele = ele_manager->getElement(d_element_type);
+
+  GET_COORD_DATA(patch, node_coord, Node);
+  DECLARE_ADJACENCY(patch, cell, node, Cell, Node);
+  GET_PATCH_DATA(patch, Ex_data, d_Ex_id, Cell, double);
+  GET_PATCH_DATA(patch, nD_data, d_nD_plot_id, Node, double);
+  GET_PATCH_DATA(patch, T_data, d_temperature_plot_id, Node, double);
+  GET_PATCH_DATA(patch, DD_err, d_DD_num_error_id, Cell, double);
+  GET_PATCH_DATA(patch, T_err, d_T_num_error_id, Cell, double);
+  GET_PATCH_DATA(patch, E_err, d_E_num_error_id, Cell, double);
+
+  int num_nodes = patch.getNumberOfNodes(1);
+  int num_cells = patch.getNumberOfCells(1);
+  int n_vertex = (NDIM == 2) ? 3 : cell_node_ext[1] - cell_node_ext[0];
+
+  // 节点恢复梯度累加器 (面积加权): Σ|e|·σ_h,e 与 Σ|e|
+  tbox::Array<double> acc_E(NDIM * num_nodes, 0.0);
+  tbox::Array<double> acc_DD(NDIM * num_nodes, 0.0);
+  tbox::Array<double> acc_T(NDIM * num_nodes, 0.0);
+  tbox::Array<double> acc_area(num_nodes, 0.0);
+  // 单元面积与单元常数梯度 (第二遍误差积分复用)
+  tbox::Array<double> cell_area(num_cells, 0.0);
+  tbox::Array<double> grad_E(NDIM * num_cells, 0.0);
+  tbox::Array<double> grad_DD(NDIM * num_cells, 0.0);
+  tbox::Array<double> grad_T(NDIM * num_cells, 0.0);
+
+  // 第一遍: 逐单元计算单元常数梯度 σ_h 与面积, 累加到节点
+  for (int c = 0; c < num_cells; ++c) {
+    tbox::Array<hier::DoubleVector<NDIM> > vertex(n_vertex);
+    tbox::Array<double> nD(n_vertex);
+    tbox::Array<double> T(n_vertex);
+    for (int i1 = 0, j = cell_node_ext[c]; i1 < n_vertex; ++i1, ++j) {
+      int gn = cell_node_idx[j];
+      for (int k = 0; k < NDIM; ++k)
+        vertex[i1][k] = (*node_coord)(k, gn);
+      nD[i1] = (*nD_data)(0, gn);
+      T[i1] = (*T_data)(0, gn);
+    }
+    // 三角形面积 |e| = 0.5·|(v1−v0)×(v2−v0)|
+    cell_area[c] = 0.5 * fabs((vertex[1][0] - vertex[0][0]) * (vertex[2][1] - vertex[0][1]) -
+                              (vertex[1][1] - vertex[0][1]) * (vertex[2][0] - vertex[0][0]));
+    // 单元电场 (calculate_Ex 已算); 浓度/温度梯度用 calculateElementEx (返回负梯度, 取反)
+    for (int k = 0; k < NDIM; ++k)
+      grad_E[c * NDIM + k] = (*Ex_data)(k, c);
+    tbox::Pointer<tbox::Vector<double> > ele_grad = new tbox::Vector<double>();
+    ele_grad->resize(NDIM);
+    for (int k = 0; k < NDIM; ++k)
+      (*ele_grad)[k] = 0.0;
+    ele->calculateElementEx(vertex, dt, time, nD, ele_grad);
+    for (int k = 0; k < NDIM; ++k)
+      grad_DD[c * NDIM + k] = -(*ele_grad)[k];
+    for (int k = 0; k < NDIM; ++k)
+      (*ele_grad)[k] = 0.0;
+    ele->calculateElementEx(vertex, dt, time, T, ele_grad);
+    for (int k = 0; k < NDIM; ++k)
+      grad_T[c * NDIM + k] = -(*ele_grad)[k];
+    // 累加到节点
+    for (int i1 = 0, j = cell_node_ext[c]; i1 < n_vertex; ++i1, ++j) {
+      int gn = cell_node_idx[j];
+      acc_area[gn] += cell_area[c];
+      for (int k = 0; k < NDIM; ++k) {
+        acc_E[gn * NDIM + k] += cell_area[c] * grad_E[c * NDIM + k];
+        acc_DD[gn * NDIM + k] += cell_area[c] * grad_DD[c * NDIM + k];
+        acc_T[gn * NDIM + k] += cell_area[c] * grad_T[c * NDIM + k];
+      }
+    }
+  }
+
+  // 节点恢复梯度: σ*_i = 面积加权平均
+  tbox::Array<double> rec_E(NDIM * num_nodes, 0.0);
+  tbox::Array<double> rec_DD(NDIM * num_nodes, 0.0);
+  tbox::Array<double> rec_T(NDIM * num_nodes, 0.0);
+  for (int i = 0; i < num_nodes; ++i)
+    if (acc_area[i] > 0.0)
+      for (int k = 0; k < NDIM; ++k) {
+        rec_E[i * NDIM + k] = acc_E[i * NDIM + k] / acc_area[i];
+        rec_DD[i * NDIM + k] = acc_DD[i * NDIM + k] / acc_area[i];
+        rec_T[i * NDIM + k] = acc_T[i * NDIM + k] / acc_area[i];
+      }
+
+  // 第二遍: 逐单元误差指示子 η_e = sqrt( |e|·|σ*(x_c) − σ_h,e|² ), 重心处 σ* = 节点均值
+  for (int c = 0; c < num_cells; ++c) {
+    int g0 = cell_node_idx[cell_node_ext[c]];
+    int g1 = cell_node_idx[cell_node_ext[c] + 1];
+    int g2 = cell_node_idx[cell_node_ext[c] + 2];
+    double se_E[NDIM], se_DD[NDIM], se_T[NDIM];
+    for (int k = 0; k < NDIM; ++k) {
+      se_E[k] = (rec_E[g0 * NDIM + k] + rec_E[g1 * NDIM + k] + rec_E[g2 * NDIM + k]) / 3.0;
+      se_DD[k] = (rec_DD[g0 * NDIM + k] + rec_DD[g1 * NDIM + k] + rec_DD[g2 * NDIM + k]) / 3.0;
+      se_T[k] = (rec_T[g0 * NDIM + k] + rec_T[g1 * NDIM + k] + rec_T[g2 * NDIM + k]) / 3.0;
+    }
+    double dE = 0.0, dDD = 0.0, dT = 0.0;
+    for (int k = 0; k < NDIM; ++k) {
+      dE += (se_E[k] - grad_E[c * NDIM + k]) * (se_E[k] - grad_E[c * NDIM + k]);
+      dDD += (se_DD[k] - grad_DD[c * NDIM + k]) * (se_DD[k] - grad_DD[c * NDIM + k]);
+      dT += (se_T[k] - grad_T[c * NDIM + k]) * (se_T[k] - grad_T[c * NDIM + k]);
+    }
+    (*E_err)(0, c) = sqrt(cell_area[c] * dE);
+    (*DD_err)(0, c) = sqrt(cell_area[c] * dDD);
+    (*T_err)(0, c) = sqrt(cell_area[c] * dT);
+  }
 }
 
 // ===== 归约 =====

@@ -170,6 +170,8 @@ private:
   tbox::Pointer<algs::NumericalIntegratorComponent<NDIM> > d_T_cons_intc;
   /*!@brief 数值构件: 温度场后处理 (误差向量 + plot 更新) */
   tbox::Pointer<algs::NumericalIntegratorComponent<NDIM> > d_T_post_intc;
+  /*!@brief 数值构件: 多物理场后验误差估计 (ZZ 梯度恢复) */
+  tbox::Pointer<algs::NumericalIntegratorComponent<NDIM> > d_error_est_intc;
 
   
 
