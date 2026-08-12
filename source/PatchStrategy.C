@@ -1724,11 +1724,13 @@ void PatchStrategy::buildEMatrixOnPatch(hier::Patch<NDIM> &patch, const double t
 void PatchStrategy::calculateErrorOnPatch(hier::Patch<NDIM> &patch, const double time,
                                           const double dt, const string &component_name) {
   // ======================================================================
-  // 多物理场后验误差估计: Zienkiewicz-Zhu 型梯度恢复
-  //   (Zienkiewicz O.C. & Zhu J.Z., "A simple error estimator and adaptive
-  //    procedure for practical engineering analysis", IJNME 24, 1987; SPR 1992)
+  // 多物理场后验误差估计: Zienkiewicz-Zhu 型梯度恢复 (分材料变体)
+  //   (Zienkiewicz O.C. & Zhu J.Z., IJNME 24, 1987; SPR 1992; 异质介质处理见
+  //    Ainsworth & Oden, "A Posteriori Error Estimation in FEA", Wiley 2000, §7.2)
   //   指示子:      η²_e = ∫_e |σ*(x) − σ_h(x)|² dΩ
-  //   恢复梯度:    σ*_i = Σ_{e∋i} |e|·σ_h,e / Σ_{e∋i} |e|   (节点面积加权平均)
+  //   恢复梯度:    σ*_i = Σ_{e∋i, f(e)=f} |e|·σ_h,e / Σ_{e∋i, f(e)=f} |e|
+  //                 (节点面积加权平均, 按材料 f(e)=cell_flag 分组:
+  //                 材料交界处梯度不连续, 跨材料平均会产生虚假大误差)
   //   单元内恢复:  σ*(x) = Σ_j N_j(x)·σ*_j (线性插值), 重心处 = 节点恢复值算术平均
   //   σ_h 为线性元的单元常数梯度:
   //     电场    σ_E  = E_h = −∇V_h               (d_Ex_id)
@@ -1746,6 +1748,7 @@ void PatchStrategy::calculateErrorOnPatch(hier::Patch<NDIM> &patch, const double
   GET_PATCH_DATA(patch, Ex_data, d_Ex_id, Cell, double);
   GET_PATCH_DATA(patch, nD_data, d_nD_plot_id, Node, double);
   GET_PATCH_DATA(patch, T_data, d_temperature_plot_id, Node, double);
+  GET_PATCH_DATA(patch, Cell_flag, d_Cell_flag_id, Cell, int);
   GET_PATCH_DATA(patch, DD_err, d_DD_num_error_id, Cell, double);
   GET_PATCH_DATA(patch, T_err, d_T_num_error_id, Cell, double);
   GET_PATCH_DATA(patch, E_err, d_E_num_error_id, Cell, double);
@@ -1754,18 +1757,23 @@ void PatchStrategy::calculateErrorOnPatch(hier::Patch<NDIM> &patch, const double
   int num_cells = patch.getNumberOfCells(1);
   int n_vertex = (NDIM == 2) ? 3 : cell_node_ext[1] - cell_node_ext[0];
 
-  // 节点恢复梯度累加器 (面积加权): Σ|e|·σ_h,e 与 Σ|e|
-  tbox::Array<double> acc_E(NDIM * num_nodes, 0.0);
-  tbox::Array<double> acc_DD(NDIM * num_nodes, 0.0);
-  tbox::Array<double> acc_T(NDIM * num_nodes, 0.0);
-  tbox::Array<double> acc_area(num_nodes, 0.0);
+  // 节点恢复梯度累加器 (按材料分组, 面积加权): Σ|e|·σ_h,e 与 Σ|e|
+  // 分组依据: ZZ 恢复假设解梯度连续, 而异质介质材料交界处梯度不连续
+  // (σ 跳跃 → ∇V/∇nD/∇T 跳跃), 跨材料平均会产生虚假的大误差指示子;
+  // 恢复限制在同一材料子域 (Ainsworth & Oden, "A Posteriori Error Estimation
+  //  in Finite Element Analysis", Wiley 2000, §7.2; Carstensen & Funken 2000).
+  const int NUM_MAT = 8;  // cell_flag ∈ [0,7]
+  tbox::Array<double> acc_E(NUM_MAT * num_nodes * NDIM, 0.0);
+  tbox::Array<double> acc_DD(NUM_MAT * num_nodes * NDIM, 0.0);
+  tbox::Array<double> acc_T(NUM_MAT * num_nodes * NDIM, 0.0);
+  tbox::Array<double> acc_area(NUM_MAT * num_nodes, 0.0);
   // 单元面积与单元常数梯度 (第二遍误差积分复用)
   tbox::Array<double> cell_area(num_cells, 0.0);
   tbox::Array<double> grad_E(NDIM * num_cells, 0.0);
   tbox::Array<double> grad_DD(NDIM * num_cells, 0.0);
   tbox::Array<double> grad_T(NDIM * num_cells, 0.0);
 
-  // 第一遍: 逐单元计算单元常数梯度 σ_h 与面积, 累加到节点
+  // 第一遍: 逐单元计算单元常数梯度 σ_h 与面积, 按材料分组累加到节点
   for (int c = 0; c < num_cells; ++c) {
     tbox::Array<hier::DoubleVector<NDIM> > vertex(n_vertex);
     tbox::Array<double> nD(n_vertex);
@@ -1795,40 +1803,51 @@ void PatchStrategy::calculateErrorOnPatch(hier::Patch<NDIM> &patch, const double
     ele->calculateElementEx(vertex, dt, time, T, ele_grad);
     for (int k = 0; k < NDIM; ++k)
       grad_T[c * NDIM + k] = -(*ele_grad)[k];
-    // 累加到节点
+    // 按材料分组累加到节点 (交界处两侧材料各自累加, 互不污染)
+    int f = (*Cell_flag)(0, c);
     for (int i1 = 0, j = cell_node_ext[c]; i1 < n_vertex; ++i1, ++j) {
       int gn = cell_node_idx[j];
-      acc_area[gn] += cell_area[c];
+      acc_area[f * num_nodes + gn] += cell_area[c];
       for (int k = 0; k < NDIM; ++k) {
-        acc_E[gn * NDIM + k] += cell_area[c] * grad_E[c * NDIM + k];
-        acc_DD[gn * NDIM + k] += cell_area[c] * grad_DD[c * NDIM + k];
-        acc_T[gn * NDIM + k] += cell_area[c] * grad_T[c * NDIM + k];
+        acc_E[(f * num_nodes + gn) * NDIM + k] += cell_area[c] * grad_E[c * NDIM + k];
+        acc_DD[(f * num_nodes + gn) * NDIM + k] += cell_area[c] * grad_DD[c * NDIM + k];
+        acc_T[(f * num_nodes + gn) * NDIM + k] += cell_area[c] * grad_T[c * NDIM + k];
       }
     }
   }
 
-  // 节点恢复梯度: σ*_i = 面积加权平均
-  tbox::Array<double> rec_E(NDIM * num_nodes, 0.0);
-  tbox::Array<double> rec_DD(NDIM * num_nodes, 0.0);
-  tbox::Array<double> rec_T(NDIM * num_nodes, 0.0);
-  for (int i = 0; i < num_nodes; ++i)
-    if (acc_area[i] > 0.0)
-      for (int k = 0; k < NDIM; ++k) {
-        rec_E[i * NDIM + k] = acc_E[i * NDIM + k] / acc_area[i];
-        rec_DD[i * NDIM + k] = acc_DD[i * NDIM + k] / acc_area[i];
-        rec_T[i * NDIM + k] = acc_T[i * NDIM + k] / acc_area[i];
-      }
+  // 节点恢复梯度 (按材料分组): σ*_i = 面积加权平均
+  tbox::Array<double> rec_E(NUM_MAT * num_nodes * NDIM, 0.0);
+  tbox::Array<double> rec_DD(NUM_MAT * num_nodes * NDIM, 0.0);
+  tbox::Array<double> rec_T(NUM_MAT * num_nodes * NDIM, 0.0);
+  for (int f = 0; f < NUM_MAT; ++f)
+    for (int i = 0; i < num_nodes; ++i)
+      if (acc_area[f * num_nodes + i] > 0.0)
+        for (int k = 0; k < NDIM; ++k) {
+          rec_E[(f * num_nodes + i) * NDIM + k] =
+              acc_E[(f * num_nodes + i) * NDIM + k] / acc_area[f * num_nodes + i];
+          rec_DD[(f * num_nodes + i) * NDIM + k] =
+              acc_DD[(f * num_nodes + i) * NDIM + k] / acc_area[f * num_nodes + i];
+          rec_T[(f * num_nodes + i) * NDIM + k] =
+              acc_T[(f * num_nodes + i) * NDIM + k] / acc_area[f * num_nodes + i];
+        }
 
   // 第二遍: 逐单元误差指示子 η_e = sqrt( |e|·|σ*(x_c) − σ_h,e|² ), 重心处 σ* = 节点均值
+  // (单元取本材料的恢复值; 材料交界处两种材料各自恢复, 界面单元不再虚高)
   for (int c = 0; c < num_cells; ++c) {
+    int f = (*Cell_flag)(0, c);
     int g0 = cell_node_idx[cell_node_ext[c]];
     int g1 = cell_node_idx[cell_node_ext[c] + 1];
     int g2 = cell_node_idx[cell_node_ext[c] + 2];
     double se_E[NDIM], se_DD[NDIM], se_T[NDIM];
     for (int k = 0; k < NDIM; ++k) {
-      se_E[k] = (rec_E[g0 * NDIM + k] + rec_E[g1 * NDIM + k] + rec_E[g2 * NDIM + k]) / 3.0;
-      se_DD[k] = (rec_DD[g0 * NDIM + k] + rec_DD[g1 * NDIM + k] + rec_DD[g2 * NDIM + k]) / 3.0;
-      se_T[k] = (rec_T[g0 * NDIM + k] + rec_T[g1 * NDIM + k] + rec_T[g2 * NDIM + k]) / 3.0;
+      se_E[k] = (rec_E[(f * num_nodes + g0) * NDIM + k] + rec_E[(f * num_nodes + g1) * NDIM + k] +
+                 rec_E[(f * num_nodes + g2) * NDIM + k]) / 3.0;
+      se_DD[k] = (rec_DD[(f * num_nodes + g0) * NDIM + k] +
+                  rec_DD[(f * num_nodes + g1) * NDIM + k] +
+                  rec_DD[(f * num_nodes + g2) * NDIM + k]) / 3.0;
+      se_T[k] = (rec_T[(f * num_nodes + g0) * NDIM + k] + rec_T[(f * num_nodes + g1) * NDIM + k] +
+                 rec_T[(f * num_nodes + g2) * NDIM + k]) / 3.0;
     }
     double dE = 0.0, dDD = 0.0, dT = 0.0;
     for (int k = 0; k < NDIM; ++k) {
